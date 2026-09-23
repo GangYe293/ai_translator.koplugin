@@ -1,5 +1,7 @@
 # AI Translator Plugin for KOReader
 
+[简体中文](./README.md) | **English**
+
 A multi-engine translation plugin for KOReader. It ships with **Microsoft Edge Translate built in — completely free, no API key, works out of the box** — and also supports DeepL, DeepSeek, Zhipu GLM-4 Flash (free tier), SiliconFlow, and any OpenAI-compatible endpoint.
 
 The plugin does not modify a single line of KOReader source. It takes over KOReader's built-in translation entry points at runtime, so your existing gestures — long-press, text selection, dictionary and highlight menus — stay exactly the same. Only the engine behind them changes.

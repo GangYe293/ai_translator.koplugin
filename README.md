@@ -1,6 +1,6 @@
 # AI 翻译插件 for KOReader
 
-[English](./README_EN.md) | 简体中文
+**简体中文** | [English](./README_EN.md)
 
 一个给 KOReader 用的多引擎翻译插件。内置 **Microsoft Edge 免费翻译（零配置、无需 API Key，开箱即用）**，同时支持 DeepL、DeepSeek、智谱 GLM-4 Flash（免费）、硅基流动，以及任意 OpenAI 兼容接口。
 
