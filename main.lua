@@ -348,6 +348,15 @@ local ENGINE_MODULES = {
     edge = EdgeTranslator,
 }
 
+-- 逐字生成译文的引擎。DeepL / Edge / Google 是专用机器翻译引擎（整段一次返回），
+-- 大模型则是一个 token 一个 token 往外吐，所以同样的文本要慢一个量级。
+local GENERATIVE_ENGINES = {
+    deepseek = true,
+    openai = true,
+    glm = true,
+    siliconflow = true,
+}
+
 local TEST_SHORT_TEXT = "Hello World"
 
 -- 公版英文（《傲慢与偏见》开头）拼到接近 Kindle 一页的量级，
@@ -357,7 +366,10 @@ local TEST_LONG_PARAGRAPH = "It is a truth universally acknowledged, that a sing
     .. "such a man may be on his first entering a neighbourhood, this truth is so well fixed in the "
     .. "minds of the surrounding families, that he is considered the rightful property of some one or "
     .. "other of their daughters."
-local TEST_LONG_TEXT = string.rep(TEST_LONG_PARAGRAPH .. "\n\n", 6)
+-- 长文本取 3 段（约 1130 字符）≈ Kindle 一页（30 行 × 40 字符）。
+-- 早先堆了 6 段（2262 字符 ≈ 两页）：AI 引擎逐字生成要多等一倍（真机 13-21 秒），
+-- 却并不比一页多诊断出什么 —— 既拖慢自检，也对不上「翻译本页」的真实体量。
+local TEST_LONG_TEXT = string.rep(TEST_LONG_PARAGRAPH .. "\n\n", 3)
 
 local function nowSeconds()
     local ok, socket = pcall(require, "socket")
@@ -406,6 +418,18 @@ end
 local function shorten(text, limit)
     text = (text or ""):gsub("%s+", " ")
     return truncateUtf8(text, limit)
+end
+
+-- 统计 UTF-8 字符数：Lua 5.1 没有 utf8 库，按「非续字节」计数即可（汉字 3 字节算 1 个）。
+local function utf8Len(text)
+    local n = 0
+    for i = 1, #text do
+        local b = text:byte(i)
+        if b < 128 or b >= 192 then
+            n = n + 1
+        end
+    end
+    return n
 end
 
 -- 发一次真实请求，返回：译文 / 错误详情 / 耗时（秒）
@@ -565,6 +589,11 @@ function xiaosijitranslatorplugin:buildConfigTestReport(engine)
         lines[#lines + 1] = T(_("【长文本】约 %1 字符（≈ 一页）"), #TEST_LONG_TEXT)
         if long_ok then
             lines[#lines + 1] = T(_("结果：✅ 成功（%1 秒）"), elapsedText(long_elapsed))
+            -- 输出字数是判断「慢在哪儿」的关键：大模型耗时基本等于输出字数 ÷ 生成速度。
+            local out_chars = utf8Len(long_translation)
+            local speed = (long_elapsed and long_elapsed > 0.1)
+                and math.floor(out_chars / long_elapsed + 0.5) or "?"
+            lines[#lines + 1] = T(_("输出：%1 字符（≈ %2 字符/秒）"), out_chars, speed)
             lines[#lines + 1] = T(_("译文开头：%1"), shorten(long_translation, 200))
         else
             lines[#lines + 1] = T(_("结果：❌ 失败（%1 秒）"), elapsedText(long_elapsed))
@@ -582,6 +611,16 @@ function xiaosijitranslatorplugin:buildConfigTestReport(engine)
     else
         lines[#lines + 1] = _("⚠️ 短文本能翻、长文本失败：多半是超时（网络慢 / 模型慢）或模型上下文不足。")
         lines[#lines + 1] = _("   可换更快的模型，或把整页翻译拆成更小的段落。")
+    end
+
+    -- AI 引擎的耗时基本由「输出多少字」决定，把它写清楚，免得误以为是配置问题。
+    if GENERATIVE_ENGINES[engine] then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = _("— 关于耗时 —")
+        lines[#lines + 1] = _("Edge / Google / DeepL 是专用机器翻译引擎：整段一次返回，一页通常 1-4 秒。")
+        lines[#lines + 1] = _("AI 大模型是逐字生成译文的，耗时 ≈ 输出字数 ÷ 生成速度（常见 40-90 字/秒）。")
+        lines[#lines + 1] = _("所以一页 6-10 秒、长文本十几秒都属正常；同样一段文本，Edge 这类机器翻译引擎就是要快一个量级。")
+        lines[#lines + 1] = _("想更快就换更小的模型（如智谱 GLM-4 Flash），或继续用 Edge。")
     end
     return table.concat(lines, "\n")
 end

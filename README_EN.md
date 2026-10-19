@@ -103,8 +103,10 @@ The report contains:
 
 - engine, endpoint, model, whether an API key is configured, target language;
 - **short text**: `Hello World` — validates key, balance, network and model name;
-- **long text**: roughly 2000 characters (about one page) — validates timeouts and model context;
-- per-test timing plus full error details, and a verdict at the end.
+- **long text**: roughly 1100 characters (about one Kindle page) — validates timeouts and model context;
+- per-test timing, output length and generation speed, plus full error details, and a verdict at the end.
+
+**Why is Edge a few seconds while AI models take 10-20 s?** They are different kinds of engines: Edge / Google / DeepL are dedicated machine-translation engines that return the whole text in one shot (1-4 s per page). DeepSeek / Zhipu / SiliconFlow / generic OpenAI are LLMs that generate the translation token by token, so time ≈ output length ÷ generation speed (typically 40-90 chars/s). A page takes about 6-10 s on a model, and 10-20 s for a two-page chunk is normal. The report prints `output: N chars (≈ N chars/s)` so you can see the time is spent generating, not in the network or config.
 
 Reading the verdict:
 
@@ -254,7 +256,8 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - *Test configuration* now supports the **native Google engine**: probes KOReader's built-in `Translator:translate` with a real request instead of reporting "not supported"
 - DeepSeek settings menu aligned with wordgloss.koplugin: removed the *DeepSeek Chat / Reasoner* picker (translation does not need a reasoning chain); the model name is now a free-text field (default `deepseek-chat`); the key status moved into the *API key* item title
 - *About* menu: added **Xiaohongshu ID: 老王的生活指南** under the author; removed the daily auto-check toggle — updates are manual-only
-- Regression suite: 85 + 100 assertions passing
+- *Test configuration* long text reduced from 2262 chars (two pages) to about 1130 chars (one real page), halving the wait on AI engines; the report now shows `output: N chars (≈ N chars/s)` and explains that LLMs generate token by token, so being an order of magnitude slower than Edge/Google/DeepL is expected
+- Regression suite: 91 + 100 assertions passing
 
 ### v1.2.0
 
