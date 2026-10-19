@@ -27,7 +27,13 @@ local xiaosijitranslatorplugin = WidgetContainer:extend{
 }
 
 -- 与 _meta.lua 里的 version 保持一致：「关于」显示它，更新器拿它比大小。
-xiaosijitranslatorplugin.VERSION = "1.2.1"
+xiaosijitranslatorplugin.VERSION = "1.2.2"
+
+-- 打包日期，与版本号一起显示在「关于」里。
+-- 教训（v1.2.1）：内容改了两轮、版本号却没动，两批包同名同号，用户机器上分不清装的是
+-- 哪一批，在线更新也只比版本字符串、照样说“已是最新”。以后只要重新打包就必须 +1，
+-- 并同步更新这里的日期——它是给“同号不同内容”兜底的最后一道可肉眼识别的标记。
+xiaosijitranslatorplugin.BUILD_DATE = "2026-10-19"
 
 -- 插件启用开关的设置键；未设置时视为启用（兼容老用户）
 local ENABLED_SETTING_KEY = "ai_translator_enabled"

@@ -124,7 +124,7 @@ Reading the verdict:
 
 | Item | Purpose |
 | --- | --- |
-| Version: x.y.z | Shows the current version; tap for the project URL and Releases page |
+| Version: x.y.z (build YYYY-MM-DD) | Shows the current version and build date (distinguishes two builds that share a version number); tap for the project URL and Releases page |
 | Author: GangYe293 | Project home page |
 | Xiaohongshu ID: 老王的生活指南 | The author's Xiaohongshu account (KOReader plugins & e-book tips) |
 | Check for updates | Asks GitHub for the latest release once; only speaks up when something is newer |
@@ -250,6 +250,14 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - API keys are stored locally in KOReader's settings file on your device — do not share that file publicly.
 
 ## Changelog
+
+### v1.2.2
+
+- Fixed a version-number collision: during v1.2.1 the content changed twice (features first, then the test-text optimisation) but both packages were numbered 1.2.1, so every device reported 1.2.1 and the updater considered itself up to date. Bumped to **1.2.2** and republished
+- The version row in *About* now shows a **build date** (`Version: 1.2.2 (build 2026-10-19)`), so two builds can be told apart even if the version bump is forgotten
+- New regression assertions: `_meta.version` matches `main.VERSION`, and `BUILD_DATE` exists in `YYYY-MM-DD` form
+
+> Versioning rule: every repackage must bump the version and update `_meta.lua`'s `version`, `main.lua`'s `VERSION` and `BUILD_DATE` together.
 
 ### v1.2.1
 

@@ -151,12 +151,22 @@ function UI.about_menu(plugin)
             callback = on_tap,
         }
     end
+    -- 版本号后面带上构建日期：同版本号、不同内容的包（v1.2.1 踩过）靠这一眼就能分开。
+    local version = tostring(plugin.VERSION or _("未知"))
+    local version_label = T(_("版本：%1"), version)
+    if plugin.BUILD_DATE and plugin.BUILD_DATE ~= "" then
+        version_label = T(_("版本：%1（构建 %2）"), version, plugin.BUILD_DATE)
+    end
     return {
         text = _("关于"),
         separator = true,
         sub_item_table = {
-            info_row(_("版本：") .. tostring(plugin.VERSION or _("未知")), function()
-                UI.show_text(T(_("AI翻译 %1"), tostring(plugin.VERSION or _("未知"))),
+            info_row(version_label, function()
+                local head = T(_("AI翻译 %1"), version)
+                if plugin.BUILD_DATE and plugin.BUILD_DATE ~= "" then
+                    head = T(_("AI翻译 %1（构建于 %2）"), version, plugin.BUILD_DATE)
+                end
+                UI.show_text(head,
                     T(_("多翻译引擎插件，内置完全免费的 Microsoft Edge 翻译。\n\n"
                         .. "项目地址：%1\n\n"
                         .. "更新记录、安装包都在 Releases 页面：\n%1/releases"), UI.PROJECT_URL))
