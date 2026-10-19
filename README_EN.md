@@ -17,6 +17,7 @@ The plugin does not modify a single line of KOReader source. It takes over KORea
 - **One-tap self-check**: *Tools → AI Translator → Test configuration* sends Hello World plus a page-length passage to the active engine and reports timings, output and errors
 - **Visible diagnostics**: on failure the dialog shows the full trace — endpoint, status code, request/response body — with the API key masked
 - **Persistent settings**: everything is stored in KOReader's native `G_reader_settings` (`settings.reader.lua`) and survives upgrades
+- **Online updates**: *Tools → AI Translator → About → Check for updates* pulls the latest release from GitHub, verifies SHA-256, backs up the old version and rolls back on failure; optional daily check
 - **Auto-placed menu**: the entry is inserted right after the statistics item under *Tools*, in both the file manager and the reader
 
 ## Engine comparison
@@ -115,6 +116,24 @@ Reading the verdict:
 
 > The check does spend one or two real requests (Edge is free, so it costs nothing). When the short test fails the long one is skipped — faster, and it saves quota.
 
+### 6. Online updates
+
+*Tools → AI Translator → About*:
+
+| Item | Purpose |
+| --- | --- |
+| Version: x.y.z | Shows the current version; tap for the project URL and Releases page |
+| Author: GangYe293 | Project home page |
+| Check for updates | Asks GitHub for the latest release once; only speaks up when something is newer |
+| Check once a day | **Off** by default; when ticked, asks silently on the first book opened each day — notify only, never auto-install |
+
+Install flow: download `ai_translator-<version>.zip` → verify size and SHA-256 → extract into a staging directory outside the plugin → verify the `_meta.lua` version → rename the old directory to `ai_translator.koplugin.backup` and move the new one in place → offer a restart.
+
+- **A failed step never touches the plugin directory**: download, size check, checksum, extraction and version check all bail out before the swap.
+- **The backup is kept until the new version actually starts**: if the new code crashes on load, the `.backup` next to it is the way back.
+- **Mirror fallback**: when GitHub is unreachable, gh-proxy / ghfast / ghproxy are tried in turn; the package is the very Release asset.
+- Only code is replaced — settings (keys, engine choice in `settings.reader.lua`) are untouched.
+
 ## Project layout
 
 ```
@@ -122,6 +141,9 @@ ai_translator.koplugin/
 ├── _meta.lua                     # Plugin metadata (name, description) read by KOReader's plugin manager
 ├── main.lua                      # Entry point: menu registration, engine dispatch, Translator/Highlight patching
 ├── insert_menu.lua               # Inserts the menu item after `statistics` under Tools
+├── ai_translator_update.lua     # Updater: fetch release, verify, back up and swap
+├── ai_translator_update_ui.lua  # About menu and update dialogs
+├── ai_translator_sha2.lua       # SHA-256 (only used to verify update packages)
 ├── edge_translator.lua           # Microsoft Edge Translate (no key required)
 ├── glm_translator.lua            # Zhipu GLM-4 Flash (OpenAI-compatible)
 ├── siliconflow_translator.lua    # SiliconFlow (OpenAI-compatible)
@@ -181,6 +203,7 @@ Everything goes through `G_reader_settings`, with per-engine key prefixes so eng
 | --- | --- |
 | Global | `translator_engine` (`google`/`deepl`/`deepseek`/`openai`/`glm`/`siliconflow`/`edge`) |
 | Global | `ai_translator_enabled` (`true`/`false`, absent means `true`) |
+| Global | `ai_translator_update` (updater state: `available_version`, `checked_at`, `auto_check`, `last_error`) |
 | Zhipu | `glm_api_key`, `glm_base_url`, `glm_model` |
 | SiliconFlow | `siliconflow_api_key`, `siliconflow_base_url`, `siliconflow_model` |
 | DeepSeek | `deepseek_api_key`, `deepseek_base_url`, `deepseek_model` |
@@ -201,6 +224,10 @@ Saving an empty value calls `delSetting`, falling back to the default.
 
 **A paragraph translates but a whole page does not** → run *Test configuration* first. This is usually the time-to-first-byte on long input exceeding the network timeout (before v1.1.2 the SiliconFlow engine used a 5-second block timeout and had no retries at all), and occasionally a context-window limit. All engines now use a 60 s block timeout with up to 5 backoff retries.
 
+**"Check for updates" says the network failed** → Kindles often cannot reach GitHub. The updater tries the direct connection and three mirrors; if all fail, install the Release asset manually.
+
+**The UI still looks like the old version after updating** → the update only replaces files on disk; restart KOReader to load the new code. Use *Restart now* in the dialog shown after installation.
+
 **Nothing changed after switching engines** → first make sure *Enable plugin* is ticked; engine picks are ignored while the plugin is disabled. If it still does not change, restart KOReader and confirm no other translation plugin is patching `Translator` at the same time.
 
 **Does the plugin still take over after unticking "Enable plugin"?** → No. Unticking immediately restores `Translator.translate`, `Translator.showTranslation` and `ReaderHighlight.showTranslation` to their original implementations, and translation runs entirely on KOReader's native path afterwards.
@@ -219,6 +246,16 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - API keys are stored locally in KOReader's settings file on your device — do not share that file publicly.
 
 ## Changelog
+
+### v1.2.0
+
+- Added **online updates** (*About → Check for updates*): downloads from GitHub Releases, verifies size + SHA-256, backs up the previous version and rolls back on failure
+- Added *Check once a day* (off by default; notify only, never auto-install)
+- Added the *About* submenu: version, author, check for updates, daily check toggle
+- Update verification uses a pure-Lua SHA-256 that runs on both LuaJIT and Lua 5.3
+- Automatic mirror fallback (gh-proxy / ghfast / ghproxy) when GitHub is unreachable
+- Backup cleanup now checks the running version against `_meta.lua` on disk, so declining the restart and opening another book cannot delete the rollback copy
+- Regression suite: 73 + 96 assertions passing
 
 ### v1.1.3
 

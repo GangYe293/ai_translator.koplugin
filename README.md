@@ -17,6 +17,7 @@
 - **一键自检**：`工具 → AI 翻译 → 测试配置`，向当前引擎发 Hello World 加一段约一页的长文本，直接给出耗时、译文与错误详情
 - **可视化排错**：失败时弹出完整的调试信息（端点、状态码、请求/响应体，密钥自动脱敏）
 - **配置持久化**：所有配置写入 KOReader 原生 `G_reader_settings`（`settings.reader.lua`），升级不丢
+- **在线更新**：`工具 → AI 翻译 → 关于 → 检查更新`，直接从 GitHub Release 拉新版本，SHA-256 校验、旧版自动备份、失败可回滚；可选每天自动查一次
 - **菜单自动归位**：自动插到「工具」菜单里统计项之后，文件管理器和阅读器两处都有入口
 
 ## 引擎对比
@@ -115,6 +116,24 @@
 
 > 测试会真的消耗一两次翻译额度（Edge 免费，不受影响）。短文本失败时不会再跑长文本，省时间也省额度。
 
+### 6. 在线更新
+
+`工具 → AI 翻译 → 关于`：
+
+| 项 | 作用 |
+| --- | --- |
+| 版本：x.y.z | 显示当前版本，点开有项目地址与 Releases 入口 |
+| 作者：GangYe293 | 项目主页 |
+| 检查更新 | 联网问一次 GitHub 最新 Release，有新版本才提示 |
+| 每天自动检查一次 | 默认**关**；勾上后每天第一次打开书时静默查一次，只提示、不自动装 |
+
+安装流程：确认后下载 `ai_translator-<版本>.zip` → 核对体积与 SHA-256 → 解压到插件目录之外的临时目录 → 校验 `_meta.lua` 版本号 → 旧目录改名为 `ai_translator.koplugin.backup`、新版本换名就位 → 提示重启。
+
+- **失败绝不会动插件目录**：下载、校验、解压、版本核对任何一步不通过都直接放弃。
+- **备份只在"新版本真的启动成功"后才删**：新版本一加载就崩，旁边那份 `.backup` 就是回滚用的。
+- **GitHub 直连不通会自动换镜像**（gh-proxy / ghfast / ghproxy），安装包走的就是 Release 附件。
+- 更新只替换代码，配置（`settings.reader.lua` 里的密钥、引擎选择）不受影响。
+
 ## 目录结构
 
 ```
@@ -122,6 +141,9 @@ ai_translator.koplugin/
 ├── _meta.lua                     # 插件元信息（名称、描述），KOReader 插件管理器读取
 ├── main.lua                      # 入口：注册菜单、引擎分发、Translator/Highlight 接管
 ├── insert_menu.lua               # 把菜单项插到「工具」菜单中 statistics 之后
+├── ai_translator_update.lua     # 在线更新：查 Release、校验、备份替换
+├── ai_translator_update_ui.lua  # 「关于」菜单与更新对话框
+├── ai_translator_sha2.lua       # SHA-256（只给更新包校验用）
 ├── edge_translator.lua           # Microsoft Edge 免费翻译（无需密钥）
 ├── glm_translator.lua            # 智谱 GLM-4 Flash（OpenAI 兼容）
 ├── siliconflow_translator.lua    # 硅基流动（OpenAI 兼容）
@@ -181,6 +203,7 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 | --- | --- |
 | 全局 | `translator_engine`（`google`/`deepl`/`deepseek`/`openai`/`glm`/`siliconflow`/`edge`） |
 | 全局 | `ai_translator_enabled`（`true`/`false`，缺省视为 `true`） |
+| 全局 | `ai_translator_update`（更新状态：`available_version`、`checked_at`、`auto_check`、`last_error`） |
 | 智谱 | `glm_api_key`、`glm_base_url`、`glm_model` |
 | 硅基流动 | `siliconflow_api_key`、`siliconflow_base_url`、`siliconflow_model` |
 | DeepSeek | `deepseek_api_key`、`deepseek_base_url`、`deepseek_model` |
@@ -201,6 +224,10 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 
 **整段能翻、整页翻不了** → 先用「测试配置」跑一遍。这类问题多数是长文本的首字节等待时间超过了网络超时（v1.1.2 之前硅基流动引擎的块超时只有 5 秒且完全不重试），其次是模型上下文不够。现在所有引擎统一 60 秒块超时 + 最多 5 次退避重试。
 
+**检查更新报「网络连接失败」** → Kindle 连不上 GitHub 很常见。更新器会依次尝试直连和三个镜像；全都不通时只能手动下载 Release 附件覆盖安装。
+
+**更新后界面还是旧版** → 更新装的是磁盘上的文件，需要重启 KOReader 才会加载新代码；安装完成时弹窗里点「立即重启」即可。
+
 **切换引擎后没变化** → 先确认「启用插件」是勾选状态；插件被停用时会忽略引擎选择。仍无变化就重启 KOReader，并确认没有其它翻译类插件同时接管了 `Translator`。
 
 **取消「启用插件」后还会被接管吗** → 不会。取消勾选会立即把 `Translator.translate`、`Translator.showTranslation`、`ReaderHighlight.showTranslation` 三个指针还原成原始实现，之后翻译完全走 KOReader 原生逻辑。
@@ -219,6 +246,16 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 - API 密钥保存在设备本地的 KOReader 设置文件中，请勿在公开场合分享该文件。
 
 ## 更新记录
+
+### v1.2.0
+
+- 新增**在线更新**（`关于 → 检查更新`）：从 GitHub Release 下载新版本，体积 + SHA-256 双重校验、旧版自动备份、失败自动回滚
+- 新增「每天自动检查一次」开关（默认关，只提示不自动安装）
+- 新增「关于」子菜单：版本、作者、检查更新、自动检查开关
+- 更新包校验沿用纯 Lua 的 SHA-256 实现，LuaJIT / Lua 5.3 都能跑
+- GitHub 直连失败自动回退镜像（gh-proxy / ghfast / ghproxy）
+- 备份清理增加版本闸门：内存里跑的还是旧代码时保留 `.backup`，避免"拒绝重启后又打开一本书"把后悔药删掉
+- 回归测试 73 + 96 项全过
 
 ### v1.1.3
 

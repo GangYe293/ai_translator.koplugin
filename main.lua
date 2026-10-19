@@ -18,11 +18,16 @@ local ffiUtil = require("ffi/util")
 local logger = require("logger")
 local _ = require("gettext")
 local T = ffiUtil.template
+local Updater = require("ai_translator_update")
+local UpdateUI = require("ai_translator_update_ui")
 
 local xiaosijitranslatorplugin = WidgetContainer:extend{
     name = "ai_translator",
     is_doc_only = false,
 }
+
+-- 与 _meta.lua 里的 version 保持一致：「关于」显示它，更新器拿它比大小。
+xiaosijitranslatorplugin.VERSION = "1.2.0"
 
 -- 插件启用开关的设置键；未设置时视为启用（兼容老用户）
 local ENABLED_SETTING_KEY = "ai_translator_enabled"
@@ -46,6 +51,10 @@ local highlight_patched = false
 -- 被接管过的那个 ReaderHighlight 实例。在文件管理器里关开关时 self.ui.highlight
 -- 是 nil，只能靠它把补丁还原回去。
 local highlight_patched_target
+
+-- 自动检查更新的定时器只排一次：插件在文件管理器和阅读器各有一个实例，
+-- 两个 init 都排的话会同时弹两个检查。
+local auto_check_scheduled = false
 
 function xiaosijitranslatorplugin:isEnabled()
     local value = G_reader_settings:readSetting(ENABLED_SETTING_KEY)
@@ -102,13 +111,50 @@ function xiaosijitranslatorplugin:restoreAll()
     self:restoreHighlight()
 end
 
+-- 读磁盘上的 _meta.lua 版本号。读不到返回 nil（拿不到就按"可以清理备份"处理）。
+local function read_disk_version(plugin_dir)
+    if not plugin_dir or plugin_dir == "" then return nil end
+    local ok, file = pcall(io.open, plugin_dir .. "/_meta.lua", "r")
+    if not ok or not file then return nil end
+    local text = file:read("*a")
+    file:close()
+    return text and text:match('version%s*=%s*"([^"]+)"')
+end
+
 function xiaosijitranslatorplugin:init()
     self.ui.menu:registerToMainMenu(self)
+
+    -- 更新器要先建好：「关于」菜单要用它显示版本与检查更新。这一步失败
+    -- 不能影响翻译本身，所以单独 pcall 兜住。
+    local ok_updater, updater_err = pcall(function()
+        self.updater = Updater:new{
+            settings = G_reader_settings,
+            current_version = self.VERSION,
+            plugin_dir = self.path,
+        }
+        -- 上一次更新留下的备份，现在可以删了：能跑到这里说明新版本加载成功；
+        -- 这一行绝不能提前，否则新版本一崩就没得回滚。
+        -- 但「运行中的代码」不一定是磁盘上那份：用户装完点「稍后重启」再打开一本
+        -- 书时，内存里还是旧版本，这时删备份就等于把后悔药扔了。只有两边版本
+        -- 一致才删，否则留给下一次真正的启动。
+        local disk_version = read_disk_version(self.path)
+        if disk_version == nil or disk_version == self.VERSION then
+            self.updater:cleanup_backup()
+        else
+            logger.info("AI翻译: 磁盘上是 " .. tostring(disk_version) .. "，当前运行 "
+                .. tostring(self.VERSION) .. "，保留更新备份待下次启动清理")
+        end
+    end)
+    if not ok_updater then
+        logger.err("AI翻译: 更新组件初始化失败:", tostring(updater_err))
+        self.updater = nil
+    end
 
     if not self:isEnabled() then
         -- 同进程里可能有别的实例先接管过，这里一并还原
         self:restoreAll()
         logger.info("AI翻译: 插件已停用（ai_translator_enabled=false），不做任何接管")
+        self:schedule_auto_update_check()
         return
     end
 
@@ -117,6 +163,8 @@ function xiaosijitranslatorplugin:init()
     if self.ui.highlight then
         self:patchHighlightModule()
     end
+
+    self:schedule_auto_update_check()
 end
 
 function xiaosijitranslatorplugin:patchTranslator()
@@ -518,6 +566,23 @@ function xiaosijitranslatorplugin:showConfigTest()
     end)
 end
 
+--[[--
+每天第一次打开时静默问一次 GitHub（默认关）。
+
+只提醒、不自动下载：阅读中突然弹个下载窗很打断人。查到新版就显示一条提示，
+装不装由用户到「关于 → 检查更新」里点。
+]]
+function xiaosijitranslatorplugin:schedule_auto_update_check()
+    if auto_check_scheduled then return end
+    if not self.updater then return end
+    if not self.updater:should_auto_check() then return end
+    auto_check_scheduled = true
+    UIManager:scheduleIn(10, function()
+        if not self.updater then return end
+        UpdateUI.check_update(self, true)
+    end)
+end
+
 function xiaosijitranslatorplugin:addToMainMenu(menu_items)
     logger.dbg("AI翻译: addToMainMenu called")
     
@@ -653,7 +718,9 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                 callback = function()
                     self:showConfigTest()
                 end,
+                separator = true,
             },
+            UpdateUI.about_menu(self),
         },
     }
 end
