@@ -43,6 +43,9 @@ local original_highlightShowTranslation
 -- 当前是否由本插件接管中：没接管过就不要去还原，免得覆盖别的插件的补丁
 local translator_patched = false
 local highlight_patched = false
+-- 被接管过的那个 ReaderHighlight 实例。在文件管理器里关开关时 self.ui.highlight
+-- 是 nil，只能靠它把补丁还原回去。
+local highlight_patched_target
 
 function xiaosijitranslatorplugin:isEnabled()
     local value = G_reader_settings:readSetting(ENABLED_SETTING_KEY)
@@ -84,11 +87,12 @@ end
 
 function xiaosijitranslatorplugin:restoreHighlight()
     if not highlight_patched then return end
-    local highlight = self.ui and self.ui.highlight
+    local highlight = highlight_patched_target or (self.ui and self.ui.highlight)
     if highlight and original_highlightShowTranslation then
         highlight.showTranslation = original_highlightShowTranslation
     end
     highlight_patched = false
+    highlight_patched_target = nil
     logger.info("AI翻译: ReaderHighlight 已还原为 KOReader 原生实现")
 end
 
@@ -259,6 +263,7 @@ function xiaosijitranslatorplugin:patchHighlightModule()
     end
 
     highlight_patched = true
+    highlight_patched_target = ReaderHighlight
     logger.info("AI翻译: 已接管 ReaderHighlight.showTranslation，引擎 = " .. tostring(engine))
 end
 
