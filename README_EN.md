@@ -17,7 +17,7 @@ The plugin does not modify a single line of KOReader source. It takes over KORea
 - **One-tap self-check**: *Tools → AI Translator → Test configuration* sends Hello World plus a page-length passage to the active engine and reports timings, output and errors
 - **Visible diagnostics**: on failure the dialog shows the full trace — endpoint, status code, request/response body — with the API key masked
 - **Persistent settings**: everything is stored in KOReader's native `G_reader_settings` (`settings.reader.lua`) and survives upgrades
-- **Online updates**: *Tools → AI Translator → About → Check for updates* pulls the latest release from GitHub, verifies SHA-256, backs up the old version and rolls back on failure; optional daily check
+- **Online updates**: *Tools → AI Translator → About → Check for updates* pulls the latest release from GitHub, verifies SHA-256, backs up the old version and rolls back on failure
 - **Auto-placed menu**: the entry is inserted right after the statistics item under *Tools*, in both the file manager and the reader
 
 ## Engine comparison
@@ -27,7 +27,7 @@ The plugin does not modify a single line of KOReader source. It takes over KORea
 | Microsoft Edge | Free | No | `https://edge.microsoft.com/translate/translatetext` |
 | Zhipu GLM-4 Flash | Free (rate limited) | Yes (free) | `https://open.bigmodel.cn/api/paas/v4` · `glm-4-flash` |
 | SiliconFlow | Free tier available | Yes | `https://api.siliconflow.cn/v1` · `Qwen/Qwen2.5-72B-Instruct` |
-| DeepSeek | Paid | Yes | `https://api.deepseek.com` · `deepseek-chat` / `deepseek-reasoner` |
+| DeepSeek | Paid | Yes | `https://api.deepseek.com` · `deepseek-chat` (default; type any model name) |
 | Generic OpenAI-compatible | Depends on provider | Yes | Custom base URL + model name |
 | DeepL | Free plan 500k chars/month, Pro paid | Yes | `https://api-free.deepl.com` / `https://api.deepl.com` |
 | Google | Free | No | KOReader's native implementation |
@@ -124,8 +124,10 @@ Reading the verdict:
 | --- | --- |
 | Version: x.y.z | Shows the current version; tap for the project URL and Releases page |
 | Author: GangYe293 | Project home page |
+| Xiaohongshu ID: 老王的生活指南 | The author's Xiaohongshu account (KOReader plugins & e-book tips) |
 | Check for updates | Asks GitHub for the latest release once; only speaks up when something is newer |
-| Check once a day | **Off** by default; when ticked, asks silently on the first book opened each day — notify only, never auto-install |
+
+Updates are manual-only as of v1.2.1 (the daily check toggle was removed): nothing goes online unless you tap *Check for updates*.
 
 Install flow: download `ai_translator-<version>.zip` → verify size and SHA-256 → extract into a staging directory outside the plugin → verify the `_meta.lua` version → rename the old directory to `ai_translator.koplugin.backup` and move the new one in place → offer a restart.
 
@@ -246,6 +248,13 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - API keys are stored locally in KOReader's settings file on your device — do not share that file publicly.
 
 ## Changelog
+
+### v1.2.1
+
+- *Test configuration* now supports the **native Google engine**: probes KOReader's built-in `Translator:translate` with a real request instead of reporting "not supported"
+- DeepSeek settings menu aligned with wordgloss.koplugin: removed the *DeepSeek Chat / Reasoner* picker (translation does not need a reasoning chain); the model name is now a free-text field (default `deepseek-chat`); the key status moved into the *API key* item title
+- *About* menu: added **Xiaohongshu ID: 老王的生活指南** under the author; removed the daily auto-check toggle — updates are manual-only
+- Regression suite: 85 + 100 assertions passing
 
 ### v1.2.0
 

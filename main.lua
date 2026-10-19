@@ -27,7 +27,7 @@ local xiaosijitranslatorplugin = WidgetContainer:extend{
 }
 
 -- 与 _meta.lua 里的 version 保持一致：「关于」显示它，更新器拿它比大小。
-xiaosijitranslatorplugin.VERSION = "1.2.0"
+xiaosijitranslatorplugin.VERSION = "1.2.1"
 
 -- 插件启用开关的设置键；未设置时视为启用（兼容老用户）
 local ENABLED_SETTING_KEY = "ai_translator_enabled"
@@ -51,10 +51,6 @@ local highlight_patched = false
 -- 被接管过的那个 ReaderHighlight 实例。在文件管理器里关开关时 self.ui.highlight
 -- 是 nil，只能靠它把补丁还原回去。
 local highlight_patched_target
-
--- 自动检查更新的定时器只排一次：插件在文件管理器和阅读器各有一个实例，
--- 两个 init 都排的话会同时弹两个检查。
-local auto_check_scheduled = false
 
 function xiaosijitranslatorplugin:isEnabled()
     local value = G_reader_settings:readSetting(ENABLED_SETTING_KEY)
@@ -154,7 +150,6 @@ function xiaosijitranslatorplugin:init()
         -- 同进程里可能有别的实例先接管过，这里一并还原
         self:restoreAll()
         logger.info("AI翻译: 插件已停用（ai_translator_enabled=false），不做任何接管")
-        self:schedule_auto_update_check()
         return
     end
 
@@ -163,8 +158,6 @@ function xiaosijitranslatorplugin:init()
     if self.ui.highlight then
         self:patchHighlightModule()
     end
-
-    self:schedule_auto_update_check()
 end
 
 function xiaosijitranslatorplugin:patchTranslator()
@@ -451,10 +444,52 @@ local function probeEngine(module, text, target_lang)
     return translation, err_text, elapsed
 end
 
+-- Google 引擎没有独立模块：选中它时翻译入口就是 KOReader 原生 ui/translator，
+-- 探测它 = 直接调原生 Translator:translate（返回纯文本译文）。
+local function probeGoogle(text, target_lang)
+    local started = nowSeconds()
+    local Translator = require("ui/translator")
+    local ok, result = pcall(Translator.translate, Translator, text, target_lang, nil)
+    local elapsed = nowSeconds() - started
+
+    local translation, err_text
+    if not ok then
+        err_text = tostring(result)
+    elseif type(result) == "string" and result ~= "" then
+        translation = result
+    else
+        err_text = _("未收到有效的翻译结果")
+    end
+
+    if translation then
+        translation = translation:gsub("^%s+", ""):gsub("%s+$", "")
+        if translation == "" then
+            translation = nil
+            err_text = _("引擎返回了空译文")
+        end
+    end
+
+    return translation, err_text, elapsed
+end
+
+-- Google 的目标语言跟 KOReader 原生划词翻译同一个设置键。
+local function googleTargetLang()
+    local lang = G_reader_settings:readSetting("translator_to_language")
+        or G_reader_settings:readSetting("translator_language")
+    if lang and lang ~= "" then
+        return lang
+    end
+    return "ZH"
+end
+
 local function appendEngineInfo(lines, engine, module)
     lines[#lines + 1] = T(_("引擎：%1"), ENGINE_NAMES[engine] or tostring(engine))
     if engine == "edge" then
         lines[#lines + 1] = _("接口：Microsoft Edge 公共翻译接口（免费，无需密钥）")
+        return
+    end
+    if engine == "google" then
+        lines[#lines + 1] = _("接口：KOReader 原生 Google 翻译（免费，无需密钥）")
         return
     end
     if module.getApiEndpoint then
@@ -484,16 +519,22 @@ end
 -- 纯函数：跑两次探测并拼出报告文本（不碰 UI，方便离线测试）
 function xiaosijitranslatorplugin:buildConfigTestReport(engine)
     local module = ENGINE_MODULES[engine]
-    if not module then
-        return T(_("当前引擎：%1\n\n该引擎不支持配置测试（Google 由 KOReader 原生实现，插件没有接口可测）。\n请在「当前：…」里选一个插件内置引擎后再试。"),
+    local is_google = engine == "google"
+    if not is_google and not module then
+        return T(_("当前引擎：%1\n\n该引擎不支持配置测试。\n请在「当前：…」里选一个插件内置引擎后再试。"),
             ENGINE_NAMES[engine] or tostring(engine))
     end
 
-    local target_lang = "ZH"
-    if module.getTargetLanguage then
-        local ok, lang = pcall(module.getTargetLanguage, module)
-        if ok and lang then
-            target_lang = lang
+    local target_lang
+    if is_google then
+        target_lang = googleTargetLang()
+    else
+        target_lang = "ZH"
+        if module.getTargetLanguage then
+            local ok, lang = pcall(module.getTargetLanguage, module)
+            if ok and lang then
+                target_lang = lang
+            end
         end
     end
 
@@ -502,7 +543,9 @@ function xiaosijitranslatorplugin:buildConfigTestReport(engine)
     lines[#lines + 1] = T(_("目标语言：%1"), target_lang)
     lines[#lines + 1] = ""
 
-    local short_translation, short_error, short_elapsed = probeEngine(module, TEST_SHORT_TEXT, target_lang)
+    local probe = is_google and probeGoogle
+        or function(text, lang) return probeEngine(module, text, lang) end
+    local short_translation, short_error, short_elapsed = probe(TEST_SHORT_TEXT, target_lang)
     local short_ok = short_translation ~= nil
     lines[#lines + 1] = T(_("【短文本】%1"), TEST_SHORT_TEXT)
     if short_ok then
@@ -517,7 +560,7 @@ function xiaosijitranslatorplugin:buildConfigTestReport(engine)
     local long_ok = false
     if short_ok then
         lines[#lines + 1] = ""
-        local long_translation, long_error, long_elapsed = probeEngine(module, TEST_LONG_TEXT, target_lang)
+        local long_translation, long_error, long_elapsed = probe(TEST_LONG_TEXT, target_lang)
         long_ok = long_translation ~= nil
         lines[#lines + 1] = T(_("【长文本】约 %1 字符（≈ 一页）"), #TEST_LONG_TEXT)
         if long_ok then
@@ -567,21 +610,9 @@ function xiaosijitranslatorplugin:showConfigTest()
 end
 
 --[[--
-每天第一次打开时静默问一次 GitHub（默认关）。
-
-只提醒、不自动下载：阅读中突然弹个下载窗很打断人。查到新版就显示一条提示，
-装不装由用户到「关于 → 检查更新」里点。
+每天第一次打开时静默问一次 GitHub 的逻辑已移除（v1.2.1）：
+阅读中弹网络提示很打扰人，更新改为只通过「关于 → 检查更新」手动查。
 ]]
-function xiaosijitranslatorplugin:schedule_auto_update_check()
-    if auto_check_scheduled then return end
-    if not self.updater then return end
-    if not self.updater:should_auto_check() then return end
-    auto_check_scheduled = true
-    UIManager:scheduleIn(10, function()
-        if not self.updater then return end
-        UpdateUI.check_update(self, true)
-    end)
-end
 
 function xiaosijitranslatorplugin:addToMainMenu(menu_items)
     logger.dbg("AI翻译: addToMainMenu called")

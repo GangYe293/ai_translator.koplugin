@@ -78,19 +78,31 @@ function DeepSeekTranslator:getLanguageName(lang, default_string)
     return default_string, false
 end
 
+-- DeepSeek 只留 deepseek-chat 一个模型：翻译用不上推理链（reasoner 思考模式
+-- 慢且贵，单词/整页翻译都不需要），只剩一个模型也就没必要做单选了，
+-- 改成手填（默认 deepseek-chat），以后想换模型直接改这一个字段。
+-- 菜单结构与 wordgloss.koplugin 的 DeepSeek 设置保持一致。
 function DeepSeekTranslator:genSettingsMenu()
+    local function trimmed(value)
+        return tostring(value or ""):match("^%s*(.-)%s*$")
+    end
     return {
         text = _("DeepSeek设置"),
         sub_item_table = {
+            -- API密钥：标题带「已设置 / 未设置」，不另起一行置灰项。
             {
-                text = _("API密钥"),
-                help_text = _([[输入您的DeepSeek API密钥。获取API密钥：https://platform.deepseek.com/]]),
+                text_func = function()
+                    local key = G_reader_settings:readSetting("deepseek_api_key")
+                    return key and key ~= "" and _("API密钥：已设置") or _("API密钥：未设置")
+                end,
+                help_text = _("输入您的DeepSeek API密钥。获取地址：https://platform.deepseek.com/"),
                 keep_menu_open = true,
                 callback = function()
                     local InputDialog = require("ui/widget/inputdialog")
                     local api_key_input
                     api_key_input = InputDialog:new{
                         title = _("DeepSeek API密钥"),
+                        description = _("获取地址：https://platform.deepseek.com/"),
                         input = G_reader_settings:readSetting("deepseek_api_key") or "",
                         input_hint = "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
                         input_type = "text",
@@ -106,8 +118,8 @@ function DeepSeekTranslator:genSettingsMenu()
                                     text = _("保存"),
                                     is_enter_default = true,
                                     callback = function()
-                                        local key = api_key_input:getInputText()
-                                        if key and key ~= "" then
+                                        local key = trimmed(api_key_input:getInputText())
+                                        if key ~= "" then
                                             G_reader_settings:saveSetting("deepseek_api_key", key)
                                         else
                                             G_reader_settings:delSetting("deepseek_api_key")
@@ -123,7 +135,10 @@ function DeepSeekTranslator:genSettingsMenu()
                 end,
             },
             {
-                text = _("Base URL"),
+                text_func = function()
+                    return T(_("Base URL：%1"),
+                        G_reader_settings:readSetting("deepseek_base_url") or self.base_url)
+                end,
                 help_text = _([[DeepSeek API基础URL。默认：https://api.deepseek.com]]),
                 keep_menu_open = true,
                 callback = function()
@@ -146,8 +161,8 @@ function DeepSeekTranslator:genSettingsMenu()
                                     text = _("保存"),
                                     is_enter_default = true,
                                     callback = function()
-                                        local url = base_url_input:getInputText()
-                                        if url and url ~= "" then
+                                        local url = trimmed(base_url_input:getInputText())
+                                        if url ~= "" then
                                             G_reader_settings:saveSetting("deepseek_base_url", url)
                                         else
                                             G_reader_settings:delSetting("deepseek_base_url")
@@ -164,49 +179,47 @@ function DeepSeekTranslator:genSettingsMenu()
             },
             {
                 text_func = function()
-                    local model = self:getModel()
-                    local model_names = {
-                        ["deepseek-chat"] = _("DeepSeek Chat（非思考模式）"),
-                        ["deepseek-reasoner"] = _("DeepSeek Reasoner（思考模式）"),
+                    return T(_("模型名：%1"), self:getModel())
+                end,
+                help_text = _([[默认 deepseek-chat。想用思考模式可手动改成 deepseek-reasoner，但翻译用不上推理链，一般不必。]]),
+                keep_menu_open = true,
+                callback = function(menu)
+                    local InputDialog = require("ui/widget/inputdialog")
+                    local model_input
+                    model_input = InputDialog:new{
+                        title = _("DeepSeek 模型名"),
+                        input = self:getModel(),
+                        input_hint = "deepseek-chat",
+                        input_type = "text",
+                        buttons = {
+                            {
+                                {
+                                    text = _("取消"),
+                                    callback = function()
+                                        UIManager:close(model_input)
+                                    end,
+                                },
+                                {
+                                    text = _("保存"),
+                                    is_enter_default = true,
+                                    callback = function()
+                                        local model = trimmed(model_input:getInputText())
+                                        if model ~= "" then
+                                            G_reader_settings:saveSetting("deepseek_model", model)
+                                        else
+                                            G_reader_settings:delSetting("deepseek_model")
+                                        end
+                                        if menu and menu.updateItems then menu:updateItems() end
+                                        UIManager:close(model_input)
+                                    end,
+                                },
+                            },
+                        },
                     }
-                    return T(_("模型：%1"), model_names[model] or model)
+                    UIManager:show(model_input)
+                    model_input:onShowKeyboard()
                 end,
-                sub_item_table = {
-                    {
-                        text = _("DeepSeek Chat（非思考模式）"),
-                        help_text = _([[标准对话模型，响应快速。]]),
-                        checked_func = function()
-                            return self:getModel() == "deepseek-chat"
-                        end,
-                        callback = function()
-                            G_reader_settings:saveSetting("deepseek_model", "deepseek-chat")
-                        end,
-                    },
-                    {
-                        text = _("DeepSeek Reasoner（思考模式）"),
-                        help_text = _([[思考模型，提供更深入的推理。响应较慢。]]),
-                        checked_func = function()
-                            return self:getModel() == "deepseek-reasoner"
-                        end,
-                        callback = function()
-                            G_reader_settings:saveSetting("deepseek_model", "deepseek-reasoner")
-                        end,
-                    },
-                },
                 separator = true,
-            },
-            {
-                text_func = function()
-                    local api_key = G_reader_settings:readSetting("deepseek_api_key")
-                    if api_key and api_key ~= "" then
-                        return _("API密钥：已设置")
-                    else
-                        return _("API密钥：未设置")
-                    end
-                end,
-                enabled_func = function()
-                    return false
-                end,
             },
         },
     }

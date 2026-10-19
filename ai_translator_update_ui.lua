@@ -137,10 +137,10 @@ function UI.update_progress()
 end
 
 --[[--
-「关于」：版本、作者、检查更新、每天自动检查一次。
+「关于」：版本、作者、小红书ID、检查更新。
 
-更新是联网动作，默认不自动跑；勾上「每天检查一次」后才会在打开书时静默问
-一次 GitHub，有新版本也只是提示，装不装由用户点。
+更新只手动查：点「检查更新」才联网问一次 GitHub，有新版本也只是提示，
+装不装由用户点。不设自动检查（阅读中弹网络提示很打扰人）。
 ]]
 function UI.about_menu(plugin)
     local updater = plugin.updater
@@ -165,6 +165,10 @@ function UI.about_menu(plugin)
                 UI.show_text(_("项目地址"), UI.PROJECT_URL
                     .. "\n\n" .. _("源码和更新记录都在这里。"))
             end),
+            info_row(_("小红书ID：老王的生活指南"), function()
+                UI.show_text(_("小红书"), _("小红书ID：老王的生活指南")
+                    .. "\n\n" .. _("KOReader 插件与电子书使用技巧都会发在小红书。"))
+            end),
             {
                 text_func = function()
                     if not updater then return _("检查更新") end
@@ -175,23 +179,6 @@ function UI.about_menu(plugin)
                     return _("检查更新")
                 end,
                 callback = function() UI.check_update(plugin) end,
-            },
-            {
-                text = _("每天自动检查一次"),
-                checked_func = function()
-                    return updater ~= nil and updater:get_auto_check() == true
-                end,
-                callback = function()
-                    if not updater then
-                        UI.showInfo(_("更新组件未就绪，重启 KOReader 后再试"), 3)
-                        return
-                    end
-                    local enabled = updater:get_auto_check() ~= true
-                    updater:set_auto_check(enabled)
-                    UI.showInfo(enabled
-                        and _("已开启：每天第一次打开书时检查一次更新")
-                        or _("已关闭：只在手动点「检查更新」时联网"), 3)
-                end,
             },
         },
     }

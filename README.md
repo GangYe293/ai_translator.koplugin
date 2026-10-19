@@ -27,7 +27,7 @@
 | Microsoft Edge | 免费 | 否 | `https://edge.microsoft.com/translate/translatetext` |
 | 智谱 GLM-4 Flash | 免费（有速率限制） | 是（免费领取） | `https://open.bigmodel.cn/api/paas/v4` · `glm-4-flash` |
 | 硅基流动 | 有免费额度 | 是 | `https://api.siliconflow.cn/v1` · `Qwen/Qwen2.5-72B-Instruct` |
-| DeepSeek | 付费 | 是 | `https://api.deepseek.com` · `deepseek-chat` / `deepseek-reasoner` |
+| DeepSeek | 付费 | 是 | `https://api.deepseek.com` · `deepseek-chat`（默认，可手填其它模型名） |
 | 通用 OpenAI 兼容 | 取决于服务商 | 是 | 自建 Base URL + 模型名 |
 | DeepL | 免费版 50 万字符/月，Pro 付费 | 是 | `https://api-free.deepl.com` / `https://api.deepl.com` |
 | Google | 免费 | 否 | KOReader 原生实现 |
@@ -97,7 +97,7 @@
 
 ### 5. 测试配置
 
-`工具 → AI 翻译 → 测试配置`：对**当前选中的引擎**真发一次翻译请求，用来快速判断「配置对不对、能不能翻整页」。
+`工具 → AI 翻译 → 测试配置`：对**当前选中的引擎**真发一次翻译请求，用来快速判断「配置对不对、能不能翻整页」。Google（原生）、Edge、DeepL、DeepSeek、智谱、硅基流动、通用 OpenAI 全部支持。
 
 报告里包含：
 
@@ -124,8 +124,10 @@
 | --- | --- |
 | 版本：x.y.z | 显示当前版本，点开有项目地址与 Releases 入口 |
 | 作者：GangYe293 | 项目主页 |
+| 小红书ID：老王的生活指南 | 作者的小红书，KOReader 插件与电子书技巧 |
 | 检查更新 | 联网问一次 GitHub 最新 Release，有新版本才提示 |
-| 每天自动检查一次 | 默认**关**；勾上后每天第一次打开书时静默查一次，只提示、不自动装 |
+
+更新只手动查（v1.2.1 起移除了「每天自动检查一次」开关）：点「检查更新」才联网，不会在阅读中自动弹网络提示。
 
 安装流程：确认后下载 `ai_translator-<版本>.zip` → 核对体积与 SHA-256 → 解压到插件目录之外的临时目录 → 校验 `_meta.lua` 版本号 → 旧目录改名为 `ai_translator.koplugin.backup`、新版本换名就位 → 提示重启。
 
@@ -246,6 +248,13 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 - API 密钥保存在设备本地的 KOReader 设置文件中，请勿在公开场合分享该文件。
 
 ## 更新记录
+
+### v1.2.1
+
+- 「测试配置」支持 **Google（原生）引擎**：直接调 KOReader 原生 `Translator:translate` 真发请求，不再提示"不支持配置测试"
+- DeepSeek 设置菜单与 wordgloss.koplugin 对齐：去掉「DeepSeek Chat / Reasoner」单选（翻译用不上思考链），改为**模型名手填**（默认 `deepseek-chat`，想换模型改这一个字段即可）；密钥状态并入「API密钥」标题，去掉末尾置灰状态行
+- 「关于」菜单：作者下方新增**小红书ID：老王的生活指南**；移除「每天自动检查一次」开关，更新只通过「检查更新」手动查（阅读中不再自动联网）
+- 回归测试 85 + 100 项全过
 
 ### v1.2.0
 
