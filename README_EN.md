@@ -220,6 +220,10 @@ Saving an empty value calls `delSetting`, falling back to the default.
 
 ## Changelog
 
+### v1.1.3
+
+- Fixed: the "Test configuration" report showed "◆◈" garbage after the long-text sample. The report truncated the sample **by bytes**, which can cut a multi-byte UTF-8 character in half; the device font renders the dangling bytes as boxes. Truncation is now UTF-8-safe (backs up to a complete character boundary, 4-byte emoji included). The translation content itself was never affected
+
 ### v1.1.2
 
 - **Fixed: SiliconFlow failed on full-page translation** (a selection worked, a page did not). Root cause: `socketutil:set_timeout()` without arguments sets a **5-second** block timeout, and this engine had no retries at all; it now uses 60 s plus 5 backoff retries

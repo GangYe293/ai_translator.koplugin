@@ -339,12 +339,32 @@ local function elapsedText(seconds)
     return string.format("%.0f", seconds)
 end
 
+-- UTF-8 安全截断：Lua 的 # 与 sub 都按字节计数，直接 sub(1, limit) 可能把
+-- 多字节字符拦腰截断，残缺的续字节（0x80..0xBF）会被设备字体渲染成
+-- 「◆◈」之类的乱码方块。这里往回最多退 3 字节，找到字符起始字节再截。
+local function truncateUtf8(text, limit)
+    if #text <= limit then
+        return text
+    end
+    -- cut 是合法截断点当且仅当「下一个字节不是续字节」（或已到串尾），
+    -- 这样字符本身一定完整。往回最多退 3 字节即可覆盖 4 字节字符（emoji）。
+    local cut = limit
+    while cut > 0 and cut > limit - 3 do
+        local nxt = text:byte(cut + 1)
+        if nxt == nil or nxt < 128 or nxt >= 192 then
+            break
+        end
+        cut = cut - 1
+    end
+    if cut <= 0 then
+        return "…"
+    end
+    return text:sub(1, cut) .. "…"
+end
+
 local function shorten(text, limit)
     text = (text or ""):gsub("%s+", " ")
-    if #text > limit then
-        return text:sub(1, limit) .. "…"
-    end
-    return text
+    return truncateUtf8(text, limit)
 end
 
 -- 发一次真实请求，返回：译文 / 错误详情 / 耗时（秒）
