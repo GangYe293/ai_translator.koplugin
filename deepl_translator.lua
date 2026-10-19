@@ -265,7 +265,8 @@ function DeepLTranslator:loadPage(text, target_lang, source_lang)
     local json_body = JSON.encode(body)
 
     local sink = {}
-    socketutil:set_timeout()
+    -- 不传参时 KOReader 的块超时只有 5 秒，长文本/整页很容易假超时；给足 60 秒
+    socketutil:set_timeout(60)
 
     local request = {
         url = url.build(parsed),

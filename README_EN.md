@@ -13,7 +13,8 @@ The plugin does not modify a single line of KOReader source. It takes over KORea
 - **Genuinely free options**: Microsoft Edge needs no key at all; Zhipu GLM-4 Flash is free after sign-up
 - **Non-invasive takeover**: patches both `Translator.translate/showTranslation` and `ReaderHighlight.showTranslation`
 - **Reusable results**: the result dialog offers *Save translation to note* and *Copy translation*
-- **Network resilience**: 3–5 retries with increasing backoff; offline requests are queued by NetworkMgr and resumed when the connection returns
+- **Network resilience**: a uniform 60 s block timeout plus up to 5 retries with exponential backoff; offline requests are queued by NetworkMgr and resumed when the connection returns
+- **One-tap self-check**: *Tools → AI Translator → Test configuration* sends Hello World plus a page-length passage to the active engine and reports timings, output and errors
 - **Visible diagnostics**: on failure the dialog shows the full trace — endpoint, status code, request/response body — with the API key masked
 - **Persistent settings**: everything is stored in KOReader's native `G_reader_settings` (`settings.reader.lua`) and survives upgrades
 - **Auto-placed menu**: the entry is inserted right after the statistics item under *Tools*, in both the file manager and the reader
@@ -92,6 +93,27 @@ Keep your usual habits:
 - Bottom buttons: **Save translation to note** (writes into the highlight's note) and **Copy translation** (clipboard)
 
 The target language follows KOReader's UI language by default, and can also be pinned in KOReader's own *Translation* settings.
+
+### 5. Test configuration
+
+*Tools → AI Translator → Test configuration* sends a real request to the **currently selected engine**, so you can tell in seconds whether the setup works and whether it survives a full page.
+
+The report contains:
+
+- engine, endpoint, model, whether an API key is configured, target language;
+- **short text**: `Hello World` — validates key, balance, network and model name;
+- **long text**: roughly 2000 characters (about one page) — validates timeouts and model context;
+- per-test timing plus full error details, and a verdict at the end.
+
+Reading the verdict:
+
+| Symptom | Meaning |
+| --- | --- |
+| short OK, long fails | usually a timeout (slow network / slow model) or too small a context window |
+| short fails too | key, balance, model name or network — the error detail carries the HTTP status |
+| both OK | the engine is fine for full-page translation |
+
+> The check does spend one or two real requests (Edge is free, so it costs nothing). When the short test fails the long one is skipped — faster, and it saves quota.
 
 ## Project layout
 
@@ -177,6 +199,8 @@ Saving an empty value calls `delSetting`, falling back to the default.
 
 **Spins forever with no result** → check the connection; LLM engines time out after 60 s per request, so split long passages.
 
+**A paragraph translates but a whole page does not** → run *Test configuration* first. This is usually the time-to-first-byte on long input exceeding the network timeout (before v1.1.2 the SiliconFlow engine used a 5-second block timeout and had no retries at all), and occasionally a context-window limit. All engines now use a 60 s block timeout with up to 5 backoff retries.
+
 **Nothing changed after switching engines** → first make sure *Enable plugin* is ticked; engine picks are ignored while the plugin is disabled. If it still does not change, restart KOReader and confirm no other translation plugin is patching `Translator` at the same time.
 
 **Does the plugin still take over after unticking "Enable plugin"?** → No. Unticking immediately restores `Translator.translate`, `Translator.showTranslation` and `ReaderHighlight.showTranslation` to their original implementations, and translation runs entirely on KOReader's native path afterwards.
@@ -195,6 +219,16 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - API keys are stored locally in KOReader's settings file on your device — do not share that file publicly.
 
 ## Changelog
+
+### v1.1.2
+
+- **Fixed: SiliconFlow failed on full-page translation** (a selection worked, a page did not). Root cause: `socketutil:set_timeout()` without arguments sets a **5-second** block timeout, and this engine had no retries at all; it now uses 60 s plus 5 backoff retries
+- SiliconFlow now splits the prompt into system/user messages and respects the target language (it used to hardcode "translate into Chinese")
+- SiliconFlow logs the input length and error code on failure, so `crash.log` on the device is enough to diagnose it
+- DeepL and the generic OpenAI engine also moved from the 5-second default to 60 s
+- Added the *Test configuration* menu (below *Paid*): sends Hello World plus a page-length passage to the active engine and reports timing, output and full error details
+- Engine metadata (name / endpoint / model) consolidated into one shared table used by both the menu and the test
+- Regression suite grew from 41 to 66 assertions
 
 ### v1.1.1
 

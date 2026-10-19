@@ -256,20 +256,36 @@ function SiliconFlowTranslator:loadPage(text, target_lang, source_lang)
     local parsed = url.parse(api_endpoint)
     table.insert(debug_info, "🔗 解析后的URL: " .. url.build(parsed))
 
-    local content = "你是一个专业的翻译助手。请将以下文本翻译成中文。只返回翻译结果，不要添加任何解释或额外内容。文本是" .. text
+    local lang_names = {
+        ZH = "中文（简体）",
+        EN = "英语",
+        JA = "日语",
+        KO = "韩语",
+        FR = "法语",
+        DE = "德语",
+        ES = "西班牙语",
+        RU = "俄语",
+        IT = "意大利语",
+        PT = "葡萄牙语",
+        AR = "阿拉伯语",
+        HI = "印地语",
+    }
+
+    local target_lang_name = lang_names[target_lang] or target_lang
+    local system_prompt = "你是一个专业的翻译助手。请将用户提供的文本翻译成" .. target_lang_name
+        .. "。只返回翻译结果，不要添加任何解释或额外内容，并保留原文的段落与换行。"
 
     local model = self:getModel()
     table.insert(debug_info, "🤖 模型: " .. model)
-    table.insert(debug_info, "🌐 目标语言: " .. target_lang)
+    table.insert(debug_info, "🌐 目标语言: " .. target_lang .. " (" .. target_lang_name .. ")")
+    table.insert(debug_info, "📏 输入长度: " .. #text .. " 字符")
     table.insert(debug_info, "")
 
     local body = {
         model = model,
         messages = {
-            {
-                role = "user",
-                content = content
-            }
+            { role = "system", content = system_prompt },
+            { role = "user", content = text },
         },
         stream = false,
     }
@@ -280,7 +296,6 @@ function SiliconFlowTranslator:loadPage(text, target_lang, source_lang)
     table.insert(debug_info, "")
 
     local sink = {}
-    socketutil:set_timeout()
 
     local request = {
         url = url.build(parsed),
@@ -300,16 +315,46 @@ function SiliconFlowTranslator:loadPage(text, target_lang, source_lang)
     table.insert(debug_info, "  Authorization: Bearer " .. string.sub(api_key, 1, 8) .. "...")
     table.insert(debug_info, "")
 
-    logger.dbg("硅基流动 request:", request.url, "model:", model, "target:", target_lang)
+    logger.dbg("硅基流动 request:", request.url, "model:", model, "target:", target_lang, "len:", #text)
 
-    local code, headers, status = socket.skip(1, http.request(request))
+    local code, headers, status
+    local max_retries = 5
+    local retry_delay = 2
+    local retry_count = 0
+
+    -- 关键：必须显式给足 block timeout。
+    -- KOReader 的 socketutil:set_timeout() 不传参时把 block timeout 设成 **5 秒**
+    --（set_timeout 内部 `block_timeout or 5`）。整页长文本时，模型首字节经常要
+    -- 5 秒以上才回来，于是立刻 "timeout"，而且这个引擎此前还没有任何重试 ——
+    -- 表现就是「截一段能翻、整页翻不了」。这里对齐 GLM / DeepSeek 并给足余量：
+    -- 单次阻塞 60 秒、总时长上限 180 秒、最多 5 次退避重试。
+    socketutil:set_timeout(60, 180)
+
+    while retry_count < max_retries do
+        code, headers, status = socket.skip(1, http.request(request))
+
+        if status and (status:find("wantread") or status:find("WANTREAD")
+                or status:find("timeout") or status:find("TIMEOUT")) then
+            retry_count = retry_count + 1
+            table.insert(debug_info, "🔄 遇到网络错误(" .. tostring(status) .. ")，正在重试... ("
+                .. retry_count .. "/" .. max_retries .. ")")
+            logger.warn("硅基流动 网络错误，重试", retry_count, status, "len:", #text)
+            socket.sleep(retry_delay)
+            retry_delay = retry_delay * 1.2
+        else
+            break
+        end
+    end
+
     socketutil:reset_timeout()
 
     table.insert(debug_info, "📊 HTTP状态码: " .. tostring(code or "无"))
 
     if headers == nil then
+        -- 打开 debug 也看不到的话，至少把「多长的文本、什么错误」留在 crash.log 里
+        logger.warn("硅基流动 网络失败:", status or code, "len:", #text, "timeout: 60s")
         table.insert(debug_info, "❌ 网络错误: " .. (status or code or "未知错误"))
-        table.insert(debug_info, "请检查网络连接")
+        table.insert(debug_info, "请检查网络连接（长文本首字节超过 60 秒也会走到这里）")
         return { success = false, error = table.concat(debug_info, "\n") }
     end
 

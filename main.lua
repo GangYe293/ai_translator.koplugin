@@ -284,6 +284,220 @@ function xiaosijitranslatorplugin:onEngineSelected(engine, display_name)
     UIManager:show(require("ui/widget/infomessage"):new{ text = text })
 end
 
+------------------------------------------------------------------------
+-- 「测试配置」：拿当前选中的引擎真发一次请求，把能不能翻、耗时、错误详情摊开
+------------------------------------------------------------------------
+
+local ENGINE_NAMES = {
+    google = _("Google翻译"),
+    deepl = _("DeepL翻译"),
+    deepseek = _("DeepSeek翻译"),
+    openai = _("通用OpenAI翻译"),
+    glm = _("智谱GLM-4 Flash翻译"),
+    siliconflow = _("硅基流动翻译"),
+    edge = _("Microsoft Edge 免费翻译"),
+}
+
+local ENGINE_MODULES = {
+    deepl = DeepLTranslator,
+    deepseek = DeepSeekTranslator,
+    openai = OpenAITranslator,
+    glm = GLMTranslator,
+    siliconflow = SiliconFlowTranslator,
+    edge = EdgeTranslator,
+}
+
+local TEST_SHORT_TEXT = "Hello World"
+
+-- 公版英文（《傲慢与偏见》开头）拼到接近 Kindle 一页的量级，
+-- 用来区分「短句能翻、整页翻不了」这类只有长文本才暴露的问题。
+local TEST_LONG_PARAGRAPH = "It is a truth universally acknowledged, that a single man in possession "
+    .. "of a good fortune, must be in want of a wife. However little known the feelings or views of "
+    .. "such a man may be on his first entering a neighbourhood, this truth is so well fixed in the "
+    .. "minds of the surrounding families, that he is considered the rightful property of some one or "
+    .. "other of their daughters."
+local TEST_LONG_TEXT = string.rep(TEST_LONG_PARAGRAPH .. "\n\n", 6)
+
+local function nowSeconds()
+    local ok, socket = pcall(require, "socket")
+    if ok and socket and socket.gettime then
+        local ok2, value = pcall(socket.gettime)
+        if ok2 and value then
+            return value
+        end
+    end
+    return os.time()
+end
+
+local function elapsedText(seconds)
+    if not seconds or seconds < 0 then
+        return "?"
+    end
+    if seconds < 10 then
+        return string.format("%.1f", seconds)
+    end
+    return string.format("%.0f", seconds)
+end
+
+local function shorten(text, limit)
+    text = (text or ""):gsub("%s+", " ")
+    if #text > limit then
+        return text:sub(1, limit) .. "…"
+    end
+    return text
+end
+
+-- 发一次真实请求，返回：译文 / 错误详情 / 耗时（秒）
+-- 各引擎 loadPage 的返回结构不同（Edge: translation，DeepL: translations，AI: choices），
+-- 这里统一归一化，顺便把 pcall 兜住 —— DeepL 出错时是直接 error() 的。
+local function probeEngine(module, text, target_lang)
+    local started = nowSeconds()
+    local ok, result = pcall(module.loadPage, module, text, target_lang, nil)
+    local elapsed = nowSeconds() - started
+
+    local translation, err_text
+    if not ok then
+        err_text = tostring(result)
+    elseif type(result) ~= "table" then
+        err_text = _("引擎没有返回任何结果")
+    elseif result.success == false then
+        err_text = result.error or _("未知错误")
+    elseif type(result.translation) == "string" and result.translation ~= "" then
+        translation = result.translation
+    elseif result.translations and result.translations[1] then
+        translation = result.translations[1].text
+    elseif result.choices and result.choices[1] and result.choices[1].message then
+        translation = result.choices[1].message.content
+    else
+        err_text = result.error or _("未收到有效的翻译结果")
+    end
+
+    if translation then
+        translation = translation:gsub("^%s+", ""):gsub("%s+$", "")
+        if translation == "" then
+            translation = nil
+            err_text = _("引擎返回了空译文")
+        end
+    end
+
+    return translation, err_text, elapsed
+end
+
+local function appendEngineInfo(lines, engine, module)
+    lines[#lines + 1] = T(_("引擎：%1"), ENGINE_NAMES[engine] or tostring(engine))
+    if engine == "edge" then
+        lines[#lines + 1] = _("接口：Microsoft Edge 公共翻译接口（免费，无需密钥）")
+        return
+    end
+    if module.getApiEndpoint then
+        local ok, endpoint = pcall(module.getApiEndpoint, module)
+        if ok and endpoint then
+            lines[#lines + 1] = T(_("接口：%1"), endpoint)
+        end
+    end
+    if module.getModel then
+        local ok, model = pcall(module.getModel, module)
+        if ok and model then
+            lines[#lines + 1] = T(_("模型：%1"), model)
+        end
+    end
+    if module.getApiKey then
+        local ok, key = pcall(module.getApiKey, module)
+        if ok then
+            if key then
+                lines[#lines + 1] = _("API 密钥：已配置")
+            else
+                lines[#lines + 1] = _("API 密钥：❌ 未配置")
+            end
+        end
+    end
+end
+
+-- 纯函数：跑两次探测并拼出报告文本（不碰 UI，方便离线测试）
+function xiaosijitranslatorplugin:buildConfigTestReport(engine)
+    local module = ENGINE_MODULES[engine]
+    if not module then
+        return T(_("当前引擎：%1\n\n该引擎不支持配置测试（Google 由 KOReader 原生实现，插件没有接口可测）。\n请在「当前：…」里选一个插件内置引擎后再试。"),
+            ENGINE_NAMES[engine] or tostring(engine))
+    end
+
+    local target_lang = "ZH"
+    if module.getTargetLanguage then
+        local ok, lang = pcall(module.getTargetLanguage, module)
+        if ok and lang then
+            target_lang = lang
+        end
+    end
+
+    local lines = {}
+    appendEngineInfo(lines, engine, module)
+    lines[#lines + 1] = T(_("目标语言：%1"), target_lang)
+    lines[#lines + 1] = ""
+
+    local short_translation, short_error, short_elapsed = probeEngine(module, TEST_SHORT_TEXT, target_lang)
+    local short_ok = short_translation ~= nil
+    lines[#lines + 1] = T(_("【短文本】%1"), TEST_SHORT_TEXT)
+    if short_ok then
+        lines[#lines + 1] = T(_("结果：✅ 成功（%1 秒）"), elapsedText(short_elapsed))
+        lines[#lines + 1] = T(_("译文：%1"), shorten(short_translation, 200))
+    else
+        lines[#lines + 1] = T(_("结果：❌ 失败（%1 秒）"), elapsedText(short_elapsed))
+        lines[#lines + 1] = _("错误详情：")
+        lines[#lines + 1] = short_error or "?"
+    end
+
+    local long_ok = false
+    if short_ok then
+        lines[#lines + 1] = ""
+        local long_translation, long_error, long_elapsed = probeEngine(module, TEST_LONG_TEXT, target_lang)
+        long_ok = long_translation ~= nil
+        lines[#lines + 1] = T(_("【长文本】约 %1 字符（≈ 一页）"), #TEST_LONG_TEXT)
+        if long_ok then
+            lines[#lines + 1] = T(_("结果：✅ 成功（%1 秒）"), elapsedText(long_elapsed))
+            lines[#lines + 1] = T(_("译文开头：%1"), shorten(long_translation, 200))
+        else
+            lines[#lines + 1] = T(_("结果：❌ 失败（%1 秒）"), elapsedText(long_elapsed))
+            lines[#lines + 1] = _("错误详情：")
+            lines[#lines + 1] = long_error or "?"
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = _("— 结论 —")
+    if not short_ok then
+        lines[#lines + 1] = _("❌ 短文本就失败了：先看上面的错误详情（密钥 / 网络 / 模型名 / 余额）。")
+    elseif long_ok then
+        lines[#lines + 1] = _("✅ 短文本和长文本都能翻，该引擎可以正常用于整页翻译。")
+    else
+        lines[#lines + 1] = _("⚠️ 短文本能翻、长文本失败：多半是超时（网络慢 / 模型慢）或模型上下文不足。")
+        lines[#lines + 1] = _("   可换更快的模型，或把整页翻译拆成更小的段落。")
+    end
+    return table.concat(lines, "\n")
+end
+
+function xiaosijitranslatorplugin:showConfigTest()
+    local engine = G_reader_settings:readSetting("translator_engine") or "edge"
+    local Trapper = require("ui/trapper")
+    local TextViewer = require("ui/widget/textviewer")
+    local Screen = require("device").screen
+
+    logger.info("AI翻译: 开始测试配置，引擎 = " .. tostring(engine))
+
+    -- 放子进程里跑：网络再慢也不卡界面（Trapper 自带「请稍候」提示）
+    Trapper:wrap(function()
+        local report = self:buildConfigTestReport(engine)
+        logger.info("AI翻译: 测试配置结束，引擎 = " .. tostring(engine))
+        UIManager:show(TextViewer:new{
+            title = _("配置测试结果"),
+            title_multilines = true,
+            text = report,
+            text_type = "lookup",
+            height = math.floor(Screen:getHeight() * 0.8),
+            add_default_buttons = true,
+        })
+    end)
+end
+
 function xiaosijitranslatorplugin:addToMainMenu(menu_items)
     logger.dbg("AI翻译: addToMainMenu called")
     
@@ -318,16 +532,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
             {
                 text_func = function()
                     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
-                    local engine_names = {
-                        google = _("Google翻译"),
-                        deepl = _("DeepL翻译"),
-                        deepseek = _("DeepSeek翻译"),
-                        openai = _("通用OpenAI翻译"),
-                        glm = _("智谱GLM-4 Flash翻译"),
-                        siliconflow = _("硅基流动翻译"),
-                        edge = _("Microsoft Edge 免费翻译"),
-                    }
-                    local name = engine_names[engine] or engine
+                    local name = ENGINE_NAMES[engine] or engine
                     if not self:isEnabled() then
                         return T(_("当前：%1（插件已停用）"), name)
                     end
@@ -421,6 +626,13 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                     DeepSeekTranslator:genSettingsMenu(),
                     OpenAITranslator:genSettingsMenu(),
                 },
+            },
+            {
+                text = _("测试配置"),
+                help_text = _("向当前选中的引擎发一条 Hello World，再追加一段约一页的长文本，检查密钥、网络、模型名以及长文本翻译是否正常。结果里会显示耗时和完整错误详情。"),
+                callback = function()
+                    self:showConfigTest()
+                end,
             },
         },
     }
