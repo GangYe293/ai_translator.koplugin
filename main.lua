@@ -24,13 +24,68 @@ local xiaosijitranslatorplugin = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+-- 插件启用开关的设置键；未设置时视为启用（兼容老用户）
+local ENABLED_SETTING_KEY = "ai_translator_enabled"
+
+function xiaosijitranslatorplugin:isEnabled()
+    local value = G_reader_settings:readSetting(ENABLED_SETTING_KEY)
+    if value == nil then
+        return true
+    end
+    return value and true or false
+end
+
+-- 把两个入口的原始方法存起来，停用时才能完整还原
+function xiaosijitranslatorplugin:captureOriginals()
+    local Translator = require("ui/translator")
+    if not self.original_translate then
+        self.original_translate = Translator.translate
+        self.original_showTranslation = Translator.showTranslation
+        logger.dbg("AI翻译: saved original translator methods")
+    end
+    if self.ui.highlight and not self.original_highlightShowTranslation then
+        self.original_highlightShowTranslation = self.ui.highlight.showTranslation
+        logger.dbg("AI翻译: saved highlight showTranslation method")
+    end
+end
+
+function xiaosijitranslatorplugin:restoreTranslator()
+    local Translator = require("ui/translator")
+    if self.original_translate then
+        Translator.translate = self.original_translate
+    end
+    if self.original_showTranslation then
+        Translator.showTranslation = self.original_showTranslation
+    end
+end
+
+function xiaosijitranslatorplugin:restoreHighlight()
+    if self.ui.highlight and self.original_highlightShowTranslation then
+        self.ui.highlight.showTranslation = self.original_highlightShowTranslation
+    end
+end
+
+-- 停用：把接管过的入口全部还原成 KOReader 原生实现
+function xiaosijitranslatorplugin:restoreAll()
+    self:restoreTranslator()
+    self:restoreHighlight()
+    logger.dbg("AI翻译: plugin disabled, original translator restored")
+end
+
 function xiaosijitranslatorplugin:init()
     logger.dbg("AI翻译: init called")
     self.ui.menu:registerToMainMenu(self)
     logger.dbg("AI翻译: registered to main menu")
-    
+
+    self:captureOriginals()
+
+    if not self:isEnabled() then
+        logger.dbg("AI翻译: plugin disabled by setting, skip patching")
+        return
+    end
+
     self:patchTranslator()
-    
+
     if self.ui.highlight then
         self:patchHighlightModule()
     end
@@ -39,10 +94,11 @@ end
 function xiaosijitranslatorplugin:patchTranslator()
     local Translator = require("ui/translator")
 
-    if not self.original_translate then
-        self.original_translate = Translator.translate
-        self.original_showTranslation = Translator.showTranslation
-        logger.dbg("AI翻译: saved original translator methods")
+    self:captureOriginals()
+
+    if not self:isEnabled() then
+        self:restoreTranslator()
+        return
     end
 
     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
@@ -130,9 +186,11 @@ function xiaosijitranslatorplugin:patchHighlightModule()
 
     local ReaderHighlight = self.ui.highlight
 
-    if not self.original_highlightShowTranslation then
-        self.original_highlightShowTranslation = ReaderHighlight.showTranslation
-        logger.dbg("AI翻译: saved highlight showTranslation method")
+    self:captureOriginals()
+
+    if not self:isEnabled() then
+        self:restoreHighlight()
+        return
     end
 
     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
@@ -174,6 +232,23 @@ function xiaosijitranslatorplugin:patchHighlightModule()
     end
 end
 
+-- 切换引擎：开关打开时立即接管，关闭时只记住选择（等启用后生效）
+function xiaosijitranslatorplugin:onEngineSelected(engine, display_name)
+    G_reader_settings:saveSetting("translator_engine", engine)
+    G_reader_settings:flush()
+
+    self:patchTranslator()
+    self:patchHighlightModule()
+
+    local text
+    if self:isEnabled() then
+        text = T(_("%1 已启用"), display_name)
+    else
+        text = T(_("已选择%1\n插件当前处于停用状态，勾选「启用插件」后生效"), display_name)
+    end
+    UIManager:show(require("ui/widget/infomessage"):new{ text = text })
+end
+
 function xiaosijitranslatorplugin:addToMainMenu(menu_items)
     logger.dbg("AI翻译: addToMainMenu called")
     
@@ -181,6 +256,30 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
         text = _("AI翻译"),
         sorting_hint = "tools",
         sub_item_table = {
+            {
+                text = _("启用插件"),
+                help_text = _("勾选：接管 KOReader 翻译并使用本插件的引擎。取消勾选：立即还原为 KOReader 原生翻译，菜单仍保留以便随时重新启用。"),
+                checked_func = function()
+                    return self:isEnabled()
+                end,
+                callback = function()
+                    local enabled = not self:isEnabled()
+                    G_reader_settings:saveSetting(ENABLED_SETTING_KEY, enabled)
+                    G_reader_settings:flush()
+                    if enabled then
+                        -- 立即接管，无需重启
+                        self:patchTranslator()
+                        self:patchHighlightModule()
+                    else
+                        -- 立即把三个入口还原成 KOReader 原生实现
+                        self:restoreAll()
+                    end
+                    UIManager:show(require("ui/widget/infomessage"):new{
+                        text = enabled and _("AI翻译插件已启用") or _("AI翻译插件已停用\n翻译已恢复 KOReader 原生行为"),
+                    })
+                end,
+                separator = true,
+            },
             {
                 text_func = function()
                     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
@@ -193,7 +292,11 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                         siliconflow = _("硅基流动翻译"),
                         edge = _("Microsoft Edge 免费翻译"),
                     }
-                    return T(_("当前：%1"), engine_names[engine] or engine)
+                    local name = engine_names[engine] or engine
+                    if not self:isEnabled() then
+                        return T(_("当前：%1（插件已停用）"), name)
+                    end
+                    return T(_("当前：%1"), name)
                 end,
                 sub_item_table = {
                     {
@@ -203,12 +306,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return (G_reader_settings:readSetting("translator_engine") or "edge") == "google"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "google")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("Google翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("google", _("Google翻译"))
                         end,
                     },
                     {
@@ -218,12 +316,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "deepl"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "deepl")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("DeepL翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("deepl", _("DeepL翻译"))
                         end,
                     },
                     {
@@ -233,12 +326,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "deepseek"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "deepseek")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("DeepSeek翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("deepseek", _("DeepSeek翻译"))
                         end,
                     },
                     {
@@ -248,12 +336,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "openai"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "openai")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("通用OpenAI翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("openai", _("通用OpenAI翻译"))
                         end,
                     },
                     {
@@ -263,12 +346,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "siliconflow"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "siliconflow")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("硅基流动翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("siliconflow", _("硅基流动翻译"))
                         end,
                     },
                     {
@@ -278,12 +356,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "glm"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "glm")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("智谱GLM-4 Flash翻译引擎已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("glm", _("智谱GLM-4 Flash翻译"))
                         end,
                     },
                     {
@@ -293,12 +366,7 @@ function xiaosijitranslatorplugin:addToMainMenu(menu_items)
                             return G_reader_settings:readSetting("translator_engine") == "edge"
                         end,
                         callback = function()
-                            G_reader_settings:saveSetting("translator_engine", "edge")
-                            self:patchTranslator()
-                            self:patchHighlightModule()
-                            UIManager:show(require("ui/widget/infomessage"):new{
-                                text = _("Microsoft Edge 免费翻译已启用\n请重启KOReader生效"),
-                            })
+                            self:onEngineSelected("edge", _("Microsoft Edge 免费翻译"))
                         end,
                     },
                 },

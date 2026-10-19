@@ -9,6 +9,7 @@
 ## 特性
 
 - **7 个引擎可选**：Google（原生）、DeepL、DeepSeek、智谱 GLM-4 Flash、硅基流动、通用 OpenAI 兼容、Microsoft Edge
+- **一键启用 / 停用**：`工具 → AI 翻译 → 启用插件`，取消勾选立即把翻译还给 KOReader 原生实现，勾选立即接管，不用重启、不用卸载
 - **完全免费选项**：Microsoft Edge 无需任何密钥；智谱 GLM-4 Flash 注册即送免费额度
 - **零侵入接管**：同时接管 `Translator.translate/showTranslation` 与划词高亮的 `ReaderHighlight.showTranslation`
 - **结果可复用**：翻译弹窗支持「保存翻译到笔记」与「复制翻译」，译文可直接写入高亮笔记
@@ -48,16 +49,27 @@
 
 ## 使用
 
-### 1. 选择引擎
+### 1. 启用 / 停用插件
+
+`工具 → AI 翻译 → 启用插件`：
+
+- **勾选（默认）**：插件接管 `Translator` 与 `ReaderHighlight` 的翻译入口，划词翻译、词典翻译走你选中的引擎。
+- **取消勾选**：立刻把两个入口还原成 KOReader 原生实现（Google 翻译），插件不再介入任何翻译流程；菜单保留，随时勾回来即可。
+
+开关写进 `settings.reader.lua` 的 `ai_translator_enabled`，重启后保持。首次安装未写过该键时按**启用**处理，老用户升级行为不变。
+
+> 只是想换回原生翻译？用这个开关比卸载插件更省事；想彻底移除再删目录。
+
+### 2. 选择引擎
 
 `工具 → AI 翻译 → 当前：xxx`，选择你想用的引擎：
 
 - 想立刻用、不想申请密钥 → **Microsoft Edge 免费翻译**
 - 想用大模型、翻译更有"人味" → **智谱 GLM-4 Flash**（免费）或 DeepSeek / 硅基流动
 
-切换后会提示重启 KOReader 生效。
+切换后立即接管，无需重启；若某处入口仍走旧引擎，重启 KOReader 即可。
 
-### 2. 配置密钥
+### 3. 配置密钥
 
 `工具 → AI 翻译` 下按费用分了两组：
 
@@ -71,7 +83,7 @@
 - DeepSeek：https://platform.deepseek.com/
 - DeepL：https://www.deepl.com/pro-api
 
-### 3. 翻译
+### 4. 翻译
 
 保持你原有的操作习惯即可：
 
@@ -115,13 +127,14 @@ ai_translator.koplugin/
 KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）和 `ReaderHighlight.showTranslation`（划词后调用）。插件在 `init()` 时把这两个模块的关键方法替换成当前引擎的实现，并把原始方法存起来：
 
 ```
+开关关闭        →  还原原方法（等价于没装插件）
 引擎 == google  →  还原原方法，走 KOReader 原生 Google 翻译
 引擎 == 其它    →  替换为对应引擎的 translate / showTranslation
 ```
 
 好处：不用改 KOReader 一行源码，卸载插件即恢复原状；划词、笔记、长按菜单等上层逻辑全部复用。
 
-代价：替换发生在插件初始化时，因此**切换引擎后需要重启 KOReader** 才能保证两个入口都被重新 patch。
+原始方法在 `init()` 里先存进 `original_translate` / `original_showTranslation` / `original_highlightShowTranslation`，所以「还原」是确定性的：菜单开关或选 Google 都会把指针指回这三个原始函数，不存在残留接管。开关切换时会立刻重新 patch 或还原一次，无需重启；重启后按 `ai_translator_enabled` 决定初始状态。
 
 ### 3. 网络与交互
 
@@ -141,6 +154,7 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 | 引擎 | 键 |
 | --- | --- |
 | 全局 | `translator_engine`（`google`/`deepl`/`deepseek`/`openai`/`glm`/`siliconflow`/`edge`） |
+| 全局 | `ai_translator_enabled`（`true`/`false`，缺省视为 `true`） |
 | 智谱 | `glm_api_key`、`glm_base_url`、`glm_model` |
 | 硅基流动 | `siliconflow_api_key`、`siliconflow_base_url`、`siliconflow_model` |
 | DeepSeek | `deepseek_api_key`、`deepseek_base_url`、`deepseek_model` |
@@ -159,7 +173,9 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 
 **一直在转圈没结果** → 检查网络；LLM 类引擎单次 60s 超时，长文本建议分段翻译。
 
-**切换引擎后没变化** → 需要重启 KOReader；另外确认没有其它翻译类插件同时接管了 `Translator`。
+**切换引擎后没变化** → 先确认「启用插件」是勾选状态；插件被停用时会忽略引擎选择。仍无变化就重启 KOReader，并确认没有其它翻译类插件同时接管了 `Translator`。
+
+**取消「启用插件」后还会被接管吗** → 不会。取消勾选会立即把 `Translator.translate`、`Translator.showTranslation`、`ReaderHighlight.showTranslation` 三个指针还原成原始实现，之后翻译完全走 KOReader 原生逻辑。
 
 **想看详细报错** → 失败弹窗内就是调试信息，也可在 KOReader 日志里搜 `AI翻译`、`GLM request`、`Edge request`。
 
@@ -173,3 +189,12 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 
 - 本插件调用的各第三方接口（尤其是 Microsoft Edge 公共端点）为非官方接口，稳定性与配额由服务商决定，请合理使用。
 - API 密钥保存在设备本地的 KOReader 设置文件中，请勿在公开场合分享该文件。
+
+## 更新记录
+
+### v1.1.0
+
+- 新增「启用插件」开关（`工具 → AI 翻译 → 启用插件`）：勾选即接管、取消即还原，无需重启或卸载
+- 开关持久化到 `ai_translator_enabled`，未设置时默认启用，升级无感
+- 引擎选择改为即时生效，并在插件停用时给出明确提示（不再误导为"已启用"）
+- 停用状态下主菜单标题显示「当前：xxx（插件已停用）」
