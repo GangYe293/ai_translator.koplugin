@@ -134,7 +134,11 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 
 好处：不用改 KOReader 一行源码，卸载插件即恢复原状；划词、笔记、长按菜单等上层逻辑全部复用。
 
-原始方法在 `init()` 里先存进 `original_translate` / `original_showTranslation` / `original_highlightShowTranslation`，所以「还原」是确定性的：菜单开关或选 Google 都会把指针指回这三个原始函数，不存在残留接管。开关切换时会立刻重新 patch 或还原一次，无需重启；重启后按 `ai_translator_enabled` 决定初始状态。
+原始方法**只保存一次，且存在模块级变量里**（`original_translate` / `original_showTranslation` / `original_highlightShowTranslation`），所以「还原」是确定性的：菜单开关或选 Google 都会把指针指回这三个原始函数，不存在残留接管。
+
+> 为什么一定要模块级：插件在文件管理器和阅读器各有一个实例。若把原始方法存在实例上，文件管理器实例先接管后，阅读器实例会把**上一层的补丁**误当原生方法存下来 —— 在书里取消勾选就只还原成补丁本身，看起来「取消失效」。模块级变量全进程唯一，第一次捕获到的才是真原生。
+
+开关切换时会立刻重新 patch 或还原一次，无需重启；重启后按 `ai_translator_enabled` 决定初始状态。接管/还原的关键动作都打 `logger.info`，真机上可直接在 `crash.log` 里看到 `AI翻译:` 开头的行。
 
 ### 3. 网络与交互
 
@@ -191,6 +195,13 @@ KOReader 内置翻译入口有两个：`ui/translator`（词典/菜单调用）�
 - API 密钥保存在设备本地的 KOReader 设置文件中，请勿在公开场合分享该文件。
 
 ## 更新记录
+
+### v1.1.1
+
+- 修复：在阅读器里取消「启用插件」后仍走 Edge（旧版把「上一层的补丁」当成原生方法保存，导致还原无效）
+- 原始方法改存模块级变量并只捕获一次，另加 `translator_patched` / `highlight_patched` 标志，未接管过就不乱还原
+- `ReaderHighlight.showTranslation` 在不存在该方法的版本上不再凭空创建死方法
+- 接管 / 还原 / 切换引擎的关键日志升到 `logger.info`，可直接在 `crash.log` 里核验
 
 ### v1.1.0
 

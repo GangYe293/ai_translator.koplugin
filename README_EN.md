@@ -134,7 +134,11 @@ engine == other  →  swap in that engine's translate / showTranslation
 
 Benefits: zero changes to KOReader source, uninstalling restores everything, and all upstream logic — selection, notes, long-press menus — is reused as is.
 
-The originals are captured during `init()` into `original_translate` / `original_showTranslation` / `original_highlightShowTranslation`, so restoring is deterministic: both the switch and picking Google point the entries back at those three functions, with no leftover takeover. Toggling re-patches (or restores) immediately, and on the next start `ai_translator_enabled` decides the initial state.
+The originals are captured **once, in module-level variables** (`original_translate` / `original_showTranslation` / `original_highlightShowTranslation`), so restoring is deterministic: both the switch and picking Google point the entries back at those three functions, with no leftover takeover.
+
+> Why module-level matters: the plugin is instantiated twice (file manager and reader). If the originals lived on the instance, the file-manager instance would patch first and the reader instance would then record **that patch** as the "original" — unticking inside a book would restore the patch instead of the native implementation. A module-level variable is process-wide, so the first capture is always the real original.
+
+Toggling re-patches (or restores) immediately, and on the next start `ai_translator_enabled` decides the initial state. Every takeover/restore logs at `logger.info`, so the lines are visible in `crash.log` on the device.
 
 ### 3. Networking and interaction
 
@@ -191,6 +195,13 @@ Saving an empty value calls `delSetting`, falling back to the default.
 - API keys are stored locally in KOReader's settings file on your device — do not share that file publicly.
 
 ## Changelog
+
+### v1.1.1
+
+- Fixed: unticking *Enable plugin* inside the reader still used Edge (the old code recorded the previous patch as the "original", so restoring was a no-op)
+- Originals now live in module-level variables and are captured once; added `translator_patched` / `highlight_patched` guards so we never restore something we did not patch
+- No longer invent a dead `ReaderHighlight.showTranslation` method on versions that do not have one
+- Takeover / restore / engine-switch events log at `logger.info` so they can be verified in `crash.log`
 
 ### v1.1.0
 

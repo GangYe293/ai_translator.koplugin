@@ -27,6 +27,23 @@ local xiaosijitranslatorplugin = WidgetContainer:extend{
 -- 插件启用开关的设置键；未设置时视为启用（兼容老用户）
 local ENABLED_SETTING_KEY = "ai_translator_enabled"
 
+--[[--
+原始方法只保存一次，而且必须保存在**模块级**，不能放在实例上。
+
+插件在文件管理器和阅读器里各有一个实例（is_doc_only = false）。文件管理器实例
+init 时就会接管 Translator；等打开书、阅读器实例 init 时，如果再去"保存原生
+方法"，抓到的其实是文件管理器实例的补丁 —— 于是在书里取消启用只会还原成补丁
+本身，看起来"取消失效、还是走 Edge"。模块级变量全进程唯一，第一次捕获到的
+才是真正的原生实现。
+]]
+local original_translate
+local original_showTranslation
+local original_highlightShowTranslation
+
+-- 当前是否由本插件接管中：没接管过就不要去还原，免得覆盖别的插件的补丁
+local translator_patched = false
+local highlight_patched = false
+
 function xiaosijitranslatorplugin:isEnabled()
     local value = G_reader_settings:readSetting(ENABLED_SETTING_KEY)
     if value == nil then
@@ -35,52 +52,59 @@ function xiaosijitranslatorplugin:isEnabled()
     return value and true or false
 end
 
--- 把两个入口的原始方法存起来，停用时才能完整还原
-function xiaosijitranslatorplugin:captureOriginals()
+local function captureTranslatorOriginals()
+    if original_translate ~= nil then return end
     local Translator = require("ui/translator")
-    if not self.original_translate then
-        self.original_translate = Translator.translate
-        self.original_showTranslation = Translator.showTranslation
-        logger.dbg("AI翻译: saved original translator methods")
-    end
-    if self.ui.highlight and not self.original_highlightShowTranslation then
-        self.original_highlightShowTranslation = self.ui.highlight.showTranslation
-        logger.dbg("AI翻译: saved highlight showTranslation method")
-    end
+    original_translate = Translator.translate
+    original_showTranslation = Translator.showTranslation
+    logger.info("AI翻译: 已保存 Translator 原生方法")
+end
+
+local function captureHighlightOriginals(highlight)
+    if original_highlightShowTranslation ~= nil then return end
+    -- 部分 KOReader 版本没有 ReaderHighlight.showTranslation（划词翻译直接调
+    -- 模块级 Translator.showTranslation），那就不要凭空造一个死方法出来。
+    if not highlight or type(highlight.showTranslation) ~= "function" then return end
+    original_highlightShowTranslation = highlight.showTranslation
+    logger.info("AI翻译: 已保存 ReaderHighlight.showTranslation 原生方法")
 end
 
 function xiaosijitranslatorplugin:restoreTranslator()
+    if not translator_patched then return end
     local Translator = require("ui/translator")
-    if self.original_translate then
-        Translator.translate = self.original_translate
+    if original_translate then
+        Translator.translate = original_translate
     end
-    if self.original_showTranslation then
-        Translator.showTranslation = self.original_showTranslation
+    if original_showTranslation then
+        Translator.showTranslation = original_showTranslation
     end
+    translator_patched = false
+    logger.info("AI翻译: Translator 已还原为 KOReader 原生实现")
 end
 
 function xiaosijitranslatorplugin:restoreHighlight()
-    if self.ui.highlight and self.original_highlightShowTranslation then
-        self.ui.highlight.showTranslation = self.original_highlightShowTranslation
+    if not highlight_patched then return end
+    local highlight = self.ui and self.ui.highlight
+    if highlight and original_highlightShowTranslation then
+        highlight.showTranslation = original_highlightShowTranslation
     end
+    highlight_patched = false
+    logger.info("AI翻译: ReaderHighlight 已还原为 KOReader 原生实现")
 end
 
 -- 停用：把接管过的入口全部还原成 KOReader 原生实现
 function xiaosijitranslatorplugin:restoreAll()
     self:restoreTranslator()
     self:restoreHighlight()
-    logger.dbg("AI翻译: plugin disabled, original translator restored")
 end
 
 function xiaosijitranslatorplugin:init()
-    logger.dbg("AI翻译: init called")
     self.ui.menu:registerToMainMenu(self)
-    logger.dbg("AI翻译: registered to main menu")
-
-    self:captureOriginals()
 
     if not self:isEnabled() then
-        logger.dbg("AI翻译: plugin disabled by setting, skip patching")
+        -- 同进程里可能有别的实例先接管过，这里一并还原
+        self:restoreAll()
+        logger.info("AI翻译: 插件已停用（ai_translator_enabled=false），不做任何接管")
         return
     end
 
@@ -94,12 +118,12 @@ end
 function xiaosijitranslatorplugin:patchTranslator()
     local Translator = require("ui/translator")
 
-    self:captureOriginals()
-
     if not self:isEnabled() then
         self:restoreTranslator()
         return
     end
+
+    captureTranslatorOriginals()
 
     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
     if engine == "deepl" then
@@ -169,29 +193,33 @@ function xiaosijitranslatorplugin:patchTranslator()
 
         logger.dbg("AI翻译: Microsoft Edge translator patched successfully")
     else
-        logger.dbg("AI翻译: using original Google translator")
-        if self.original_translate then
-            Translator.translate = self.original_translate
-        end
-        if self.original_showTranslation then
-            Translator.showTranslation = self.original_showTranslation
-        end
-    end
-end
-
-function xiaosijitranslatorplugin:patchHighlightModule()
-    if not self.ui.highlight then
+        logger.info("AI翻译: 使用 KOReader 原生 Google 翻译")
+        self:restoreTranslator()
         return
     end
 
-    local ReaderHighlight = self.ui.highlight
+    translator_patched = true
+    logger.info("AI翻译: 已接管翻译入口，引擎 = " .. tostring(engine))
+end
 
-    self:captureOriginals()
+function xiaosijitranslatorplugin:patchHighlightModule()
+    local ReaderHighlight = self.ui and self.ui.highlight
+    if not ReaderHighlight then
+        return
+    end
 
     if not self:isEnabled() then
         self:restoreHighlight()
         return
     end
+
+    -- 部分 KOReader 版本没有 ReaderHighlight.showTranslation（划词翻译直接调
+    -- 模块级 Translator.showTranslation），此时不要凭空造一个永远不会被调用的方法。
+    if type(ReaderHighlight.showTranslation) ~= "function" then
+        return
+    end
+
+    captureHighlightOriginals(ReaderHighlight)
 
     local engine = G_reader_settings:readSetting("translator_engine") or "edge"
 
@@ -226,10 +254,12 @@ function xiaosijitranslatorplugin:patchHighlightModule()
             return EdgeTranslator:showTranslation(text, detailed_view, source_lang, target_lang, from_highlight, index)
         end
     else
-        if self.original_highlightShowTranslation then
-            ReaderHighlight.showTranslation = self.original_highlightShowTranslation
-        end
+        self:restoreHighlight()
+        return
     end
+
+    highlight_patched = true
+    logger.info("AI翻译: 已接管 ReaderHighlight.showTranslation，引擎 = " .. tostring(engine))
 end
 
 -- 切换引擎：开关打开时立即接管，关闭时只记住选择（等启用后生效）
